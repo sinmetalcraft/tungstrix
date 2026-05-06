@@ -99,8 +99,8 @@ type QueryStatsTopHourTotalCPUTop10 struct {
 	TotalCPU   float64 `spanner:"total_cpu"`
 }
 
-// ListTotalCPUTop10 is 直近1hでCPU利用率が高いものを10件取得する
-func (s *StatisticsService) ListTotalCPUTop10(ctx context.Context) ([]*QueryStatsTopHourTotalCPUTop10, error) {
+// ListTopHourTotalCPUTop10 is 直近1hでCPU利用率が高いものを10件取得する
+func (s *StatisticsService) ListTopHourTotalCPUTop10(ctx context.Context) ([]*QueryStatsTopHourTotalCPUTop10, error) {
 	iter := s.cli.Single().Query(ctx, spanner.NewStatement(queryStatusTopHourTotalCPUTop10SQL))
 	defer iter.Stop()
 
