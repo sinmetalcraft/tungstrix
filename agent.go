@@ -25,13 +25,24 @@ func NewAgent(ctx context.Context) (agent.Agent, error) {
 		Name:        "analyzeQuery",
 		Description: "Retrieve the Spanner QueryPlan.",
 	}, spanner.AnalyzeQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create analyzeQuery tool: %w", err)
+	}
+
+	listTopHourTotalCPUTop10Tool, err := functiontool.New(functiontool.Config{
+		Name:        "listTopHourTotalCPUTop10",
+		Description: "List the top 10 queries by total CPU usage in the last hour from spanner_sys.query_stats_top_hour.",
+	}, spanner.ListTopHourTotalCPUTop10)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create listTopHourTotalCPUTop10 tool: %w", err)
+	}
 
 	a, err := llmagent.New(llmagent.Config{
 		Name:        "tungstrix",
 		Model:       model,
 		Description: "Agent that can provide advice about Spanner",
 		Instruction: prompt,
-		Tools:       []tool.Tool{analyzeQueryTool},
+		Tools:       []tool.Tool{analyzeQueryTool, listTopHourTotalCPUTop10Tool},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new agent: %w", err)

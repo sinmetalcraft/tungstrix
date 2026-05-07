@@ -48,6 +48,38 @@ func AnalyzeQuery(ctx tool.Context, params AnalyzeQueryToolParams) AnalyzeQueryR
 	return AnalyzeQueryResult{AnalyzeQueryResult: v}
 }
 
+type ListTopHourTotalCPUTop10ToolParams struct {
+	ProjectID  string `json:"projectID" jsonschema:"Spanner ProjectID"`
+	InstanceID string `json:"instanceID" jsonschema:"Spanner InstanceID"`
+	DatabaseID string `json:"databaseID" jsonschema:"Spanner DatabaseID"`
+}
+
+type ListTopHourTotalCPUTop10Result struct {
+	Queries []*QueryStatsTopHourTotalCPUTop10 `json:"queries" jsonschema:"Top 10 queries by total CPU usage in the last hour"`
+
+	// Error
+	Err error `json:"err" jsonschema:"Error message, if any"`
+}
+
+// ListTopHourTotalCPUTop10 is 直近1hでCPU利用率が高いものを10件取得する
+func ListTopHourTotalCPUTop10(ctx tool.Context, params ListTopHourTotalCPUTop10ToolParams) ListTopHourTotalCPUTop10Result {
+	cli, err := spanner.NewClient(ctx, fmt.Sprintf("projects/%s/instances/%s/databases/%s", params.ProjectID, params.InstanceID, params.DatabaseID))
+	if err != nil {
+		return ListTopHourTotalCPUTop10Result{Err: err}
+	}
+	defer cli.Close()
+
+	s, err := NewStatisticsService(ctx, cli)
+	if err != nil {
+		return ListTopHourTotalCPUTop10Result{Err: err}
+	}
+	v, err := s.ListTopHourTotalCPUTop10(ctx)
+	if err != nil {
+		return ListTopHourTotalCPUTop10Result{Err: err}
+	}
+	return ListTopHourTotalCPUTop10Result{Queries: v}
+}
+
 type StatisticsService struct {
 	cli *spanner.Client
 }
