@@ -37,12 +37,20 @@ func NewAgent(ctx context.Context) (agent.Agent, error) {
 		return nil, fmt.Errorf("failed to create listTopHourTotalCPUTop10 tool: %w", err)
 	}
 
+	listAvgLatencyTop25Tool, err := functiontool.New(functiontool.Config{
+		Name:        "listAvgLatencyTop25",
+		Description: "List the top 25 queries by weighted average latency across the full retention (~30 days) of spanner_sys.query_stats_top_hour, grouped by TEXT_FINGERPRINT to merge identical queries.",
+	}, spanner.ListAvgLatencyTop25)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create listAvgLatencyTop25 tool: %w", err)
+	}
+
 	a, err := llmagent.New(llmagent.Config{
 		Name:        "tungstrix",
 		Model:       model,
 		Description: "Agent that can provide advice about Spanner",
 		Instruction: prompt,
-		Tools:       []tool.Tool{analyzeQueryTool, listTopHourTotalCPUTop10Tool},
+		Tools:       []tool.Tool{analyzeQueryTool, listTopHourTotalCPUTop10Tool, listAvgLatencyTop25Tool},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new agent: %w", err)

@@ -15,6 +15,9 @@ import (
 //go:embed dmls/query_status_top_hour_total_cpu_top10.sql
 var queryStatusTopHourTotalCPUTop10SQL string
 
+//go:embed dmls/query_stats_avg_latency_top25.sql
+var queryStatsAvgLatencyTop25SQL string
+
 type AnalyzeQueryToolParams struct {
 	ProjectID  string `json:"projectID" jsonschema:"Spanner ProjectID"`
 	InstanceID string `json:"instanceID" jsonschema:"Spanner InstanceID"`
@@ -146,6 +149,71 @@ func (s *StatisticsService) ListTopHourTotalCPUTop10(ctx context.Context) ([]*Qu
 			return nil, err
 		}
 		var v QueryStatsTopHourTotalCPUTop10
+		if err := row.ToStruct(&v); err != nil {
+			return nil, err
+		}
+		result = append(result, &v)
+	}
+	return result, nil
+}
+
+type QueryStatsAvgLatencyTop25 struct {
+	TextFingerprint int64   `spanner:"text_fingerprint"`
+	Text            string  `spanner:"text"`
+	RequestTag      string  `spanner:"request_tag"`
+	Count           int64   `spanner:"count"`
+	AvgLatency      float64 `spanner:"avg_latency"`
+	AvgCPU          float64 `spanner:"avg_cpu"`
+}
+
+type ListAvgLatencyTop25ToolParams struct {
+	ProjectID  string `json:"projectID" jsonschema:"Spanner ProjectID"`
+	InstanceID string `json:"instanceID" jsonschema:"Spanner InstanceID"`
+	DatabaseID string `json:"databaseID" jsonschema:"Spanner DatabaseID"`
+}
+
+type ListAvgLatencyTop25Result struct {
+	Queries []*QueryStatsAvgLatencyTop25 `json:"queries" jsonschema:"Top 25 queries by weighted average latency across the full retention of spanner_sys.query_stats_top_hour, grouped by TEXT_FINGERPRINT"`
+
+	// Error
+	Err error `json:"err" jsonschema:"Error message, if any"`
+}
+
+// ListAvgLatencyTop25 is spanner_sys.query_stats_top_hourの全期間で平均レイテンシが高いクエリをTop25取得する
+func ListAvgLatencyTop25(ctx tool.Context, params ListAvgLatencyTop25ToolParams) ListAvgLatencyTop25Result {
+	cli, err := spanner.NewClient(ctx, fmt.Sprintf("projects/%s/instances/%s/databases/%s", params.ProjectID, params.InstanceID, params.DatabaseID))
+	if err != nil {
+		return ListAvgLatencyTop25Result{Err: err}
+	}
+	defer cli.Close()
+
+	s, err := NewStatisticsService(ctx, cli)
+	if err != nil {
+		return ListAvgLatencyTop25Result{Err: err}
+	}
+	v, err := s.ListAvgLatencyTop25(ctx)
+	if err != nil {
+		return ListAvgLatencyTop25Result{Err: err}
+	}
+	return ListAvgLatencyTop25Result{Queries: v}
+}
+
+// ListAvgLatencyTop25 is spanner_sys.query_stats_top_hourの全期間で平均レイテンシが高いクエリをTop25取得する
+// TEXT_FINGERPRINTで集約し、execution_countによる加重平均でavg_latencyを算出する
+func (s *StatisticsService) ListAvgLatencyTop25(ctx context.Context) ([]*QueryStatsAvgLatencyTop25, error) {
+	iter := s.cli.Single().Query(ctx, spanner.NewStatement(queryStatsAvgLatencyTop25SQL))
+	defer iter.Stop()
+
+	var result []*QueryStatsAvgLatencyTop25
+	for {
+		row, err := iter.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		var v QueryStatsAvgLatencyTop25
 		if err := row.ToStruct(&v); err != nil {
 			return nil, err
 		}
