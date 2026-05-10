@@ -1,0 +1,60 @@
+package tungstrix
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/sinmetalcraft/tungstrix/tools/spanner"
+	"google.golang.org/adk/agent"
+	"google.golang.org/adk/agent/llmagent"
+	"google.golang.org/adk/model/gemini"
+	"google.golang.org/adk/tool"
+	"google.golang.org/adk/tool/functiontool"
+	"google.golang.org/genai"
+)
+
+func NewAgent(ctx context.Context) (agent.Agent, error) {
+	model, err := gemini.NewModel(ctx, "gemini-2.5-pro", &genai.ClientConfig{
+		HTTPOptions: genai.HTTPOptions{APIVersion: "v1"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create new model: %w", err)
+	}
+
+	analyzeQueryTool, err := functiontool.New(functiontool.Config{
+		Name:        "analyzeQuery",
+		Description: "Retrieve the Spanner QueryPlan.",
+	}, spanner.AnalyzeQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create analyzeQuery tool: %w", err)
+	}
+
+	listTopHourTotalCPUTop10Tool, err := functiontool.New(functiontool.Config{
+		Name:        "listTopHourTotalCPUTop10",
+		Description: "List the top 10 queries by total CPU usage in the last hour from spanner_sys.query_stats_top_hour.",
+	}, spanner.ListTopHourTotalCPUTop10)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create listTopHourTotalCPUTop10 tool: %w", err)
+	}
+
+	listAvgLatencyTop25Tool, err := functiontool.New(functiontool.Config{
+		Name:        "listAvgLatencyTop25",
+		Description: "List the top 25 queries by weighted average latency across the full retention (~30 days) of spanner_sys.query_stats_top_hour, grouped by TEXT_FINGERPRINT to merge identical queries.",
+	}, spanner.ListAvgLatencyTop25)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create listAvgLatencyTop25 tool: %w", err)
+	}
+
+	a, err := llmagent.New(llmagent.Config{
+		Name:        "tungstrix",
+		Model:       model,
+		Description: "Agent that can provide advice about Spanner",
+		Instruction: prompt,
+		Tools:       []tool.Tool{analyzeQueryTool, listTopHourTotalCPUTop10Tool, listAvgLatencyTop25Tool},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create new agent: %w", err)
+	}
+
+	return a, nil
+}

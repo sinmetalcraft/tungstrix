@@ -1,6 +1,28 @@
 # tungstrix
 Spanner最適化支援Agent
 
+## Environment
+
+API Keyを利用する場合
+
+```
+GOOGLE_API_KEY={YOUR_API_KEY}
+```
+
+Vertex AIを利用する場合
+
+```
+GOOGLE_CLOUD_PROJECT={YOUR_PROJECT_ID}
+GOOGLE_CLOUD_LOCATION=us-central1
+GOOGLE_GENAI_USE_VERTEXAI=true
+```
+
+## Development
+
+```
+go run cmd/agent/main.go web api webui
+```
+
 ## 名前の由来
 
 Geminiに考えてもらいました。
