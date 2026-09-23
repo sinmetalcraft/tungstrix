@@ -12,11 +12,58 @@ import (
 	"google.golang.org/api/iterator"
 )
 
-//go:embed dmls/query_stats_total_cpu_top10.sql
-var queryStatsTotalCPUTop10SQL string
+//go:embed dmls/query_stats_total_cpu.sql
+var queryStatsTotalCPUSQL string
 
-//go:embed dmls/query_stats_avg_latency_top25.sql
-var queryStatsAvgLatencyTop25SQL string
+//go:embed dmls/query_stats_avg_latency.sql
+var queryStatsAvgLatencySQL string
+
+// QueryStatsOrder is ListQueryStatsで取得するQueryの並び順
+type QueryStatsOrder string
+
+const (
+	// QueryStatsOrderTotalCPU is 合計CPU使用量(avg_cpu_seconds * execution_countの総和)の降順
+	QueryStatsOrderTotalCPU QueryStatsOrder = "cpu"
+	// QueryStatsOrderAvgLatency is 平均レイテンシ(execution_countによる加重平均)の降順
+	QueryStatsOrderAvgLatency QueryStatsOrder = "latency"
+)
+
+// QueryStatsOrders is 指定可能なQueryStatsOrderの一覧
+var QueryStatsOrders = []QueryStatsOrder{QueryStatsOrderTotalCPU, QueryStatsOrderAvgLatency}
+
+// ParseQueryStatsOrder is 文字列をQueryStatsOrderに変換する
+func ParseQueryStatsOrder(v string) (QueryStatsOrder, error) {
+	for _, order := range QueryStatsOrders {
+		if QueryStatsOrder(v) == order {
+			return order, nil
+		}
+	}
+	return "", fmt.Errorf("invalid order %q", v)
+}
+
+// Label is ファイル名やレポートの見出しに使う表記を返す
+func (o QueryStatsOrder) Label() string {
+	switch o {
+	case QueryStatsOrderTotalCPU:
+		return "CPUTOP"
+	case QueryStatsOrderAvgLatency:
+		return "LATENCYTOP"
+	default:
+		return ""
+	}
+}
+
+// sql is 並び順に対応するSQLを返す
+func (o QueryStatsOrder) sql() (string, error) {
+	switch o {
+	case QueryStatsOrderTotalCPU:
+		return queryStatsTotalCPUSQL, nil
+	case QueryStatsOrderAvgLatency:
+		return queryStatsAvgLatencySQL, nil
+	default:
+		return "", fmt.Errorf("invalid order %q", o)
+	}
+}
 
 type AnalyzeQueryToolParams struct {
 	ProjectID  string `json:"projectID" jsonschema:"Spanner ProjectID"`
@@ -58,7 +105,7 @@ type ListTotalCPUTop10ToolParams struct {
 }
 
 type ListTotalCPUTop10Result struct {
-	Queries []*QueryStatsTotalCPUTop10 `json:"queries" jsonschema:"Top 10 queries by total CPU usage across the full retention of spanner_sys.query_stats_top_hour, grouped by TEXT_FINGERPRINT"`
+	Queries []*QueryStats `json:"queries" jsonschema:"Top 10 queries by total CPU usage across the full retention of spanner_sys.query_stats_top_hour, grouped by TEXT_FINGERPRINT"`
 
 	// Error
 	Err error `json:"err" jsonschema:"Error message, if any"`
@@ -125,23 +172,46 @@ func (s *StatisticsService) AnalyzeQueryRenderTree(ctx context.Context, sql stri
 	return v, nil
 }
 
-type QueryStatsTotalCPUTop10 struct {
+// QueryStats is spanner_sys.query_stats_top_hourをTEXT_FINGERPRINTで集約した統計
+// 並び順に関わらず同じ内容を返すため、ListQueryStatsの全てのQueryStatsOrderで共通に利用する
+type QueryStats struct {
 	TextFingerprint int64   `spanner:"text_fingerprint"`
 	Text            string  `spanner:"text"`
+	TextTruncated   bool    `spanner:"text_truncated"`
 	RequestTag      string  `spanner:"request_tag"`
 	Count           int64   `spanner:"count"`
 	AvgLatency      float64 `spanner:"avg_latency"`
 	AvgCPU          float64 `spanner:"avg_cpu"`
 	TotalCPU        float64 `spanner:"total_cpu"`
+	AvgRowsScanned  float64 `spanner:"avg_rows_scanned"`
+	AvgRowsReturned float64 `spanner:"avg_rows_returned"`
+	AvgBytes        float64 `spanner:"avg_bytes"`
 }
 
 // ListTotalCPUTop10 is spanner_sys.query_stats_top_hourの全期間で合計CPU使用量が大きいクエリをTop10取得する
-// TEXT_FINGERPRINTで集約し、total_cpuはintervalごとのexecution_count * avg_cpu_secondsの総和で算出する
-func (s *StatisticsService) ListTotalCPUTop10(ctx context.Context) ([]*QueryStatsTotalCPUTop10, error) {
-	iter := s.cli.Single().Query(ctx, spanner.NewStatement(queryStatsTotalCPUTop10SQL))
+func (s *StatisticsService) ListTotalCPUTop10(ctx context.Context) ([]*QueryStats, error) {
+	return s.ListQueryStats(ctx, QueryStatsOrderTotalCPU, 10)
+}
+
+// ListAvgLatencyTop25 is spanner_sys.query_stats_top_hourの全期間で平均レイテンシが高いクエリをTop25取得する
+func (s *StatisticsService) ListAvgLatencyTop25(ctx context.Context) ([]*QueryStats, error) {
+	return s.ListQueryStats(ctx, QueryStatsOrderAvgLatency, 25)
+}
+
+// ListQueryStats is spanner_sys.query_stats_top_hourの全期間の統計をorderの降順でlimit件取得する
+// TEXT_FINGERPRINTで集約し、avg_*はexecution_countによる加重平均で算出する
+func (s *StatisticsService) ListQueryStats(ctx context.Context, order QueryStatsOrder, limit int64) ([]*QueryStats, error) {
+	sql, err := order.sql()
+	if err != nil {
+		return nil, err
+	}
+	stmt := spanner.NewStatement(sql)
+	stmt.Params["limit"] = limit
+
+	iter := s.cli.Single().Query(ctx, stmt)
 	defer iter.Stop()
 
-	var result []*QueryStatsTotalCPUTop10
+	var result []*QueryStats
 	for {
 		row, err := iter.Next()
 		if errors.Is(err, iterator.Done) {
@@ -150,22 +220,13 @@ func (s *StatisticsService) ListTotalCPUTop10(ctx context.Context) ([]*QueryStat
 		if err != nil {
 			return nil, err
 		}
-		var v QueryStatsTotalCPUTop10
+		var v QueryStats
 		if err := row.ToStruct(&v); err != nil {
 			return nil, err
 		}
 		result = append(result, &v)
 	}
 	return result, nil
-}
-
-type QueryStatsAvgLatencyTop25 struct {
-	TextFingerprint int64   `spanner:"text_fingerprint"`
-	Text            string  `spanner:"text"`
-	RequestTag      string  `spanner:"request_tag"`
-	Count           int64   `spanner:"count"`
-	AvgLatency      float64 `spanner:"avg_latency"`
-	AvgCPU          float64 `spanner:"avg_cpu"`
 }
 
 type ListAvgLatencyTop25ToolParams struct {
@@ -175,7 +236,7 @@ type ListAvgLatencyTop25ToolParams struct {
 }
 
 type ListAvgLatencyTop25Result struct {
-	Queries []*QueryStatsAvgLatencyTop25 `json:"queries" jsonschema:"Top 25 queries by weighted average latency across the full retention of spanner_sys.query_stats_top_hour, grouped by TEXT_FINGERPRINT"`
+	Queries []*QueryStats `json:"queries" jsonschema:"Top 25 queries by weighted average latency across the full retention of spanner_sys.query_stats_top_hour, grouped by TEXT_FINGERPRINT"`
 
 	// Error
 	Err error `json:"err" jsonschema:"Error message, if any"`
@@ -198,28 +259,4 @@ func ListAvgLatencyTop25(ctx tool.Context, params ListAvgLatencyTop25ToolParams)
 		return ListAvgLatencyTop25Result{Err: err}
 	}
 	return ListAvgLatencyTop25Result{Queries: v}
-}
-
-// ListAvgLatencyTop25 is spanner_sys.query_stats_top_hourの全期間で平均レイテンシが高いクエリをTop25取得する
-// TEXT_FINGERPRINTで集約し、execution_countによる加重平均でavg_latencyを算出する
-func (s *StatisticsService) ListAvgLatencyTop25(ctx context.Context) ([]*QueryStatsAvgLatencyTop25, error) {
-	iter := s.cli.Single().Query(ctx, spanner.NewStatement(queryStatsAvgLatencyTop25SQL))
-	defer iter.Stop()
-
-	var result []*QueryStatsAvgLatencyTop25
-	for {
-		row, err := iter.Next()
-		if errors.Is(err, iterator.Done) {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-		var v QueryStatsAvgLatencyTop25
-		if err := row.ToStruct(&v); err != nil {
-			return nil, err
-		}
-		result = append(result, &v)
-	}
-	return result, nil
 }

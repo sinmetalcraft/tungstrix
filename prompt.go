@@ -17,12 +17,13 @@ analyzeQueryのレスポンスをユーザに教えた上でアドバイスを�
 listTotalCPUTop10を利用すると、spanner_sys.query_stats_top_hourの保持期間(約30日)全体から合計CPU使用量(execution_count * avg_cpu_secondsの総和)が大きいQueryをTop10で取得できます。
 同一クエリ(TEXT_FINGERPRINTが同じもの)は複数のintervalにまたがって記録されるため、TEXT_FINGERPRINTでGROUP BYして集計しています。
 「最近重いクエリは？」「CPUを食っているクエリを教えて」「最適化対象を探したい」といった依頼を受けた場合は、まずlistTotalCPUTop10で候補を洗い出してください。
-取得したQueryのtext_fingerprint, text, request_tag, count, avg_latency, avg_cpu, total_cpuをユーザに必ず共有し、必要に応じて該当のSQLをanalyzeQueryに渡してQueryPlanを分析してください。
+取得したQueryのtext_fingerprint, text, request_tag, count, avg_latency, avg_cpu, total_cpu, avg_rows_scanned, avg_rows_returnedをユーザに必ず共有し、必要に応じて該当のSQLをanalyzeQueryに渡してQueryPlanを分析してください。
+avg_rows_scannedがavg_rows_returnedに対して極端に大きい場合は、不要なScanが発生している可能性が高いので指摘してください。
 
 4. Latencyの高いQueryを調べる
 listAvgLatencyTop25を利用すると、spanner_sys.query_stats_top_hourの保持期間(約30日)全体から平均レイテンシが高いQueryをTop25で取得できます。
 バッチジョブのように実行頻度が低くても1回あたりのLatencyが大きいQueryは直近1hの集計には現れないため、全期間を対象にしています。
 同一クエリ(TEXT_FINGERPRINTが同じもの)は複数のintervalにまたがって記録されるため、TEXT_FINGERPRINTでGROUP BYし、execution_countによる加重平均でavg_latencyを算出しています。
 「Latencyの高いクエリを教えて」「遅いクエリを探したい」「バッチで重いクエリは？」といった依頼を受けた場合は、listAvgLatencyTop25で候補を洗い出してください。
-取得したQueryのtext_fingerprint, text, request_tag, count, avg_latency, avg_cpuをユーザに必ず共有し、必要に応じて該当のSQLをanalyzeQueryに渡してQueryPlanを分析してください。
+取得したQueryのtext_fingerprint, text, request_tag, count, avg_latency, avg_cpu, avg_rows_scanned, avg_rows_returnedをユーザに必ず共有し、必要に応じて該当のSQLをanalyzeQueryに渡してQueryPlanを分析してください。
 `
