@@ -12,8 +12,8 @@ import (
 	"google.golang.org/api/iterator"
 )
 
-//go:embed dmls/query_status_top_hour_total_cpu_top10.sql
-var queryStatusTopHourTotalCPUTop10SQL string
+//go:embed dmls/query_stats_total_cpu_top10.sql
+var queryStatsTotalCPUTop10SQL string
 
 //go:embed dmls/query_stats_avg_latency_top25.sql
 var queryStatsAvgLatencyTop25SQL string
@@ -51,36 +51,36 @@ func AnalyzeQuery(ctx tool.Context, params AnalyzeQueryToolParams) AnalyzeQueryR
 	return AnalyzeQueryResult{AnalyzeQueryResult: v}
 }
 
-type ListTopHourTotalCPUTop10ToolParams struct {
+type ListTotalCPUTop10ToolParams struct {
 	ProjectID  string `json:"projectID" jsonschema:"Spanner ProjectID"`
 	InstanceID string `json:"instanceID" jsonschema:"Spanner InstanceID"`
 	DatabaseID string `json:"databaseID" jsonschema:"Spanner DatabaseID"`
 }
 
-type ListTopHourTotalCPUTop10Result struct {
-	Queries []*QueryStatsTopHourTotalCPUTop10 `json:"queries" jsonschema:"Top 10 queries by total CPU usage in the last hour"`
+type ListTotalCPUTop10Result struct {
+	Queries []*QueryStatsTotalCPUTop10 `json:"queries" jsonschema:"Top 10 queries by total CPU usage across the full retention of spanner_sys.query_stats_top_hour, grouped by TEXT_FINGERPRINT"`
 
 	// Error
 	Err error `json:"err" jsonschema:"Error message, if any"`
 }
 
-// ListTopHourTotalCPUTop10 is 直近1hでCPU利用率が高いものを10件取得する
-func ListTopHourTotalCPUTop10(ctx tool.Context, params ListTopHourTotalCPUTop10ToolParams) ListTopHourTotalCPUTop10Result {
+// ListTotalCPUTop10 is spanner_sys.query_stats_top_hourの全期間で合計CPU使用量が大きいクエリをTop10取得する
+func ListTotalCPUTop10(ctx tool.Context, params ListTotalCPUTop10ToolParams) ListTotalCPUTop10Result {
 	cli, err := spanner.NewClient(ctx, fmt.Sprintf("projects/%s/instances/%s/databases/%s", params.ProjectID, params.InstanceID, params.DatabaseID))
 	if err != nil {
-		return ListTopHourTotalCPUTop10Result{Err: err}
+		return ListTotalCPUTop10Result{Err: err}
 	}
 	defer cli.Close()
 
 	s, err := NewStatisticsService(ctx, cli)
 	if err != nil {
-		return ListTopHourTotalCPUTop10Result{Err: err}
+		return ListTotalCPUTop10Result{Err: err}
 	}
-	v, err := s.ListTopHourTotalCPUTop10(ctx)
+	v, err := s.ListTotalCPUTop10(ctx)
 	if err != nil {
-		return ListTopHourTotalCPUTop10Result{Err: err}
+		return ListTotalCPUTop10Result{Err: err}
 	}
-	return ListTopHourTotalCPUTop10Result{Queries: v}
+	return ListTotalCPUTop10Result{Queries: v}
 }
 
 type StatisticsService struct {
@@ -125,21 +125,23 @@ func (s *StatisticsService) AnalyzeQueryRenderTree(ctx context.Context, sql stri
 	return v, nil
 }
 
-type QueryStatsTopHourTotalCPUTop10 struct {
-	Text       string  `spanner:"text"`
-	RequestTag string  `spanner:"request_tag"`
-	Count      int64   `spanner:"count"`
-	Latency    float64 `spanner:"latency"`
-	CPU        float64 `spanner:"cpu"`
-	TotalCPU   float64 `spanner:"total_cpu"`
+type QueryStatsTotalCPUTop10 struct {
+	TextFingerprint int64   `spanner:"text_fingerprint"`
+	Text            string  `spanner:"text"`
+	RequestTag      string  `spanner:"request_tag"`
+	Count           int64   `spanner:"count"`
+	AvgLatency      float64 `spanner:"avg_latency"`
+	AvgCPU          float64 `spanner:"avg_cpu"`
+	TotalCPU        float64 `spanner:"total_cpu"`
 }
 
-// ListTopHourTotalCPUTop10 is 直近1hでCPU利用率が高いものを10件取得する
-func (s *StatisticsService) ListTopHourTotalCPUTop10(ctx context.Context) ([]*QueryStatsTopHourTotalCPUTop10, error) {
-	iter := s.cli.Single().Query(ctx, spanner.NewStatement(queryStatusTopHourTotalCPUTop10SQL))
+// ListTotalCPUTop10 is spanner_sys.query_stats_top_hourの全期間で合計CPU使用量が大きいクエリをTop10取得する
+// TEXT_FINGERPRINTで集約し、total_cpuはintervalごとのexecution_count * avg_cpu_secondsの総和で算出する
+func (s *StatisticsService) ListTotalCPUTop10(ctx context.Context) ([]*QueryStatsTotalCPUTop10, error) {
+	iter := s.cli.Single().Query(ctx, spanner.NewStatement(queryStatsTotalCPUTop10SQL))
 	defer iter.Stop()
 
-	var result []*QueryStatsTopHourTotalCPUTop10
+	var result []*QueryStatsTotalCPUTop10
 	for {
 		row, err := iter.Next()
 		if errors.Is(err, iterator.Done) {
@@ -148,7 +150,7 @@ func (s *StatisticsService) ListTopHourTotalCPUTop10(ctx context.Context) ([]*Qu
 		if err != nil {
 			return nil, err
 		}
-		var v QueryStatsTopHourTotalCPUTop10
+		var v QueryStatsTotalCPUTop10
 		if err := row.ToStruct(&v); err != nil {
 			return nil, err
 		}

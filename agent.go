@@ -29,12 +29,12 @@ func NewAgent(ctx context.Context) (agent.Agent, error) {
 		return nil, fmt.Errorf("failed to create analyzeQuery tool: %w", err)
 	}
 
-	listTopHourTotalCPUTop10Tool, err := functiontool.New(functiontool.Config{
-		Name:        "listTopHourTotalCPUTop10",
-		Description: "List the top 10 queries by total CPU usage in the last hour from spanner_sys.query_stats_top_hour.",
-	}, spanner.ListTopHourTotalCPUTop10)
+	listTotalCPUTop10Tool, err := functiontool.New(functiontool.Config{
+		Name:        "listTotalCPUTop10",
+		Description: "List the top 10 queries by total CPU usage across the full retention (~30 days) of spanner_sys.query_stats_top_hour, grouped by TEXT_FINGERPRINT to merge identical queries.",
+	}, spanner.ListTotalCPUTop10)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create listTopHourTotalCPUTop10 tool: %w", err)
+		return nil, fmt.Errorf("failed to create listTotalCPUTop10 tool: %w", err)
 	}
 
 	listAvgLatencyTop25Tool, err := functiontool.New(functiontool.Config{
@@ -50,7 +50,7 @@ func NewAgent(ctx context.Context) (agent.Agent, error) {
 		Model:       model,
 		Description: "Agent that can provide advice about Spanner",
 		Instruction: prompt,
-		Tools:       []tool.Tool{analyzeQueryTool, listTopHourTotalCPUTop10Tool, listAvgLatencyTop25Tool},
+		Tools:       []tool.Tool{analyzeQueryTool, listTotalCPUTop10Tool, listAvgLatencyTop25Tool},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new agent: %w", err)
