@@ -30,6 +30,7 @@ func main() {
 	order := flag.String("order", string(tungstrixspanner.QueryStatsOrderTotalCPU), fmt.Sprintf("Queryの並び順 %v", tungstrixspanner.QueryStatsOrders))
 	top := flag.Int64("top", 25, "出力するQueryの件数")
 	outDir := flag.String("out", ".", "出力先ディレクトリ")
+	paramsPath := flag.String("params", "", "QueryParameterの型を指定するJSONファイル (実行計画の取得に失敗した場合に雛形を出力します)")
 	flag.Parse()
 
 	if err := run(context.Background(), &config{
@@ -40,6 +41,7 @@ func main() {
 		Order:      *order,
 		Top:        *top,
 		OutDir:     *outDir,
+		ParamsPath: *paramsPath,
 	}); err != nil {
 		log.Printf("%v", err)
 		flag.Usage()
@@ -55,6 +57,18 @@ type config struct {
 	Order      string
 	Top        int64
 	OutDir     string
+	ParamsPath string
+}
+
+// queryResult is 1Queryの出力内容
+type queryResult struct {
+	BaseName string
+	Rank     int
+	Stats    *tungstrixspanner.QueryStats
+	// ParamNames is SQLに含まれるQueryParameter名
+	ParamNames []string
+	// PlanErr is 実行計画の取得に失敗した場合のエラー
+	PlanErr error
 }
 
 func run(ctx context.Context, cfg *config) error {
@@ -67,6 +81,14 @@ func run(ctx context.Context, cfg *config) error {
 	order, err := tungstrixspanner.ParseQueryStatsOrder(cfg.Order)
 	if err != nil {
 		return fmt.Errorf("-order には %v のいずれかを指定してください: %w", tungstrixspanner.QueryStatsOrders, err)
+	}
+
+	var params queryParams
+	if cfg.ParamsPath != "" {
+		params, err = loadQueryParams(cfg.ParamsPath)
+		if err != nil {
+			return err
+		}
 	}
 
 	cli, err := spanner.NewClient(ctx, fmt.Sprintf("projects/%s/instances/%s/databases/%s", cfg.ProjectID, cfg.InstanceID, cfg.DatabaseID))
@@ -95,35 +117,80 @@ func run(ctx context.Context, cfg *config) error {
 	// 全てのファイルで同じタイムスタンプを使いたいので、Query実行後に一度だけ取得する
 	timestamp := time.Now().Format("20060102-1504")
 
-	var planFailedCount int
+	results := make([]*queryResult, 0, len(queries))
 	for i, q := range queries {
-		rank := i + 1
-		baseName := buildBaseName(cfg.Prefix, timestamp, order, rank)
+		r := &queryResult{
+			BaseName:   buildBaseName(cfg.Prefix, timestamp, order, i+1),
+			Rank:       i + 1,
+			Stats:      q,
+			ParamNames: extractQueryParamNames(q.Text),
+		}
+		results = append(results, r)
 
-		if err := writeFile(cfg.OutDir, baseName+".sql", ensureTrailingNewline(q.Text)); err != nil {
+		if err := writeFile(cfg.OutDir, r.BaseName+".sql", ensureTrailingNewline(q.Text)); err != nil {
 			return err
 		}
 
-		// QueryParameterを含むQueryやtextが切り詰められているQueryは実行計画を取得できないため、
+		boundParams, err := params.bindFor(q.TextFingerprint)
+		if err != nil {
+			return fmt.Errorf("%s (text_fingerprint=%d): %w", r.BaseName, q.TextFingerprint, err)
+		}
+
+		// DMLやQueryParameterの型が決まらないQueryは実行計画を取得できないため、
 		// 1件失敗しても中断せずにエラーを記録して次のQueryに進む
-		plan, planErr := s.AnalyzeQueryRenderTree(ctx, q.Text)
+		plan, planErr := s.AnalyzeQueryRenderTreeWithParams(ctx, q.Text, boundParams)
 		if planErr != nil {
-			planFailedCount++
-			log.Printf("%s: failed to get query plan (text_fingerprint=%d): %v", baseName, q.TextFingerprint, planErr)
+			r.PlanErr = planErr
+			log.Printf("%s: failed to get query plan (text_fingerprint=%d): %v", r.BaseName, q.TextFingerprint, planErr)
 			plan = fmt.Sprintf("failed to get query plan: %v", planErr)
 		}
-		if err := writeFile(cfg.OutDir, baseName+".txt", ensureTrailingNewline(plan)); err != nil {
+		if err := writeFile(cfg.OutDir, r.BaseName+".txt", ensureTrailingNewline(plan)); err != nil {
 			return err
 		}
 
-		if err := writeFile(cfg.OutDir, baseName+".md", buildStatsMarkdown(baseName, order, rank, q, planErr)); err != nil {
+		if err := writeFile(cfg.OutDir, r.BaseName+".md", buildStatsMarkdown(order, r)); err != nil {
 			return err
 		}
 	}
 
-	log.Printf("wrote %d queries (%d files) to %s", len(queries), len(queries)*3, cfg.OutDir)
-	if planFailedCount > 0 {
-		log.Printf("%d/%d queries failed to get a query plan", planFailedCount, len(queries))
+	log.Printf("wrote %d queries (%d files) to %s", len(results), len(results)*3, cfg.OutDir)
+	return reportFailures(cfg, timestamp, results)
+}
+
+// reportFailures is 実行計画を取得できなかったQueryをまとめてログに出し、-paramsの雛形を出力する
+func reportFailures(cfg *config, timestamp string, results []*queryResult) error {
+	var failed []*queryResult
+	for _, r := range results {
+		if r.PlanErr != nil {
+			failed = append(failed, r)
+		}
+	}
+	if len(failed) == 0 {
+		return nil
+	}
+	log.Printf("%d/%d queries failed to get a query plan", len(failed), len(results))
+
+	template, err := buildParamsTemplate(failed)
+	if err != nil {
+		return fmt.Errorf("failed to build params template: %w", err)
+	}
+	// QueryParameterを含まないQuery(DMLなど)だけが失敗した場合は、雛形を出しても意味がない
+	if template == nil {
+		return nil
+	}
+
+	name := buildParamsTemplateName(cfg.Prefix, timestamp)
+	if err := writeFile(cfg.OutDir, name, string(template)+"\n"); err != nil {
+		return err
+	}
+	log.Printf("wrote params template: %s", filepath.Join(cfg.OutDir, name))
+	log.Printf("  typeを埋めて -params=%s を付けて再実行すると実行計画を取得できます", filepath.Join(cfg.OutDir, name))
+	log.Printf("  指定可能な型: %v", supportedParamTypes())
+	for _, r := range failed {
+		if len(r.ParamNames) == 0 {
+			continue
+		}
+		log.Printf("  %d -> %s.sql", r.Stats.TextFingerprint, r.BaseName)
 	}
 	return nil
 }
@@ -132,6 +199,16 @@ func run(ctx context.Context, cfg *config) error {
 // 例: hoge-20260923-1430-CPUTOP01
 func buildBaseName(prefix string, timestamp string, order tungstrixspanner.QueryStatsOrder, rank int) string {
 	name := fmt.Sprintf("%s-%s%02d", timestamp, order.Label(), rank)
+	if prefix != "" {
+		name = prefix + "-" + name
+	}
+	return name
+}
+
+// buildParamsTemplateName is -paramsの雛形のファイル名を返す
+// keyがtext_fingerprintなのでorderに依存せず使い回せる
+func buildParamsTemplateName(prefix string, timestamp string) string {
+	name := timestamp + "-params.json"
 	if prefix != "" {
 		name = prefix + "-" + name
 	}
@@ -147,7 +224,9 @@ func writeFile(outDir string, name string, body string) error {
 }
 
 // buildStatsMarkdown is Query Statisticsをmarkdownのtableにしたものを返す
-func buildStatsMarkdown(baseName string, order tungstrixspanner.QueryStatsOrder, rank int, q *tungstrixspanner.QueryStats, planErr error) string {
+func buildStatsMarkdown(order tungstrixspanner.QueryStatsOrder, r *queryResult) string {
+	baseName, rank, q := r.BaseName, r.Rank, r.Stats
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", baseName)
 	b.WriteString("spanner_sys.query_stats_top_hour の保持期間全体を TEXT_FINGERPRINT で集約した Query Statistics です。\n")
@@ -180,11 +259,22 @@ func buildStatsMarkdown(baseName string, order tungstrixspanner.QueryStatsOrder,
 	}
 
 	fmt.Fprintf(&b, "## files\n\n- SQL: `%s.sql`\n- QueryPlan: `%s.txt`\n", baseName, baseName)
+
+	if len(r.ParamNames) > 0 {
+		b.WriteString("\n## query parameters\n\n")
+		for _, name := range r.ParamNames {
+			fmt.Fprintf(&b, "- `@%s`\n", name)
+		}
+	}
+
 	if q.TextTruncated {
 		b.WriteString("\n## note\n\ntextが切り詰められているため、.sqlは完全なSQLではありません。\n")
 	}
-	if planErr != nil {
-		fmt.Fprintf(&b, "\n## note\n\nQueryPlanの取得に失敗しました: %v\n", planErr)
+	if r.PlanErr != nil {
+		fmt.Fprintf(&b, "\n## note\n\nQueryPlanの取得に失敗しました。\n\n```\n%v\n```\n", r.PlanErr)
+		if len(r.ParamNames) > 0 {
+			fmt.Fprintf(&b, "\nQueryParameterの型が決まらないことが原因の場合は、-paramsに渡すJSONで`%d`に型を指定してください。\n", q.TextFingerprint)
+		}
 	}
 	return b.String()
 }

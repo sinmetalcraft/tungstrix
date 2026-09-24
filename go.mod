@@ -3,6 +3,7 @@ module github.com/sinmetalcraft/tungstrix
 go 1.25.1
 
 require (
+	cloud.google.com/go v0.123.0
 	cloud.google.com/go/spanner v1.86.1
 	github.com/apstndb/spannerplan v0.1.4
 	google.golang.org/adk v0.1.0
@@ -12,7 +13,6 @@ require (
 
 require (
 	cel.dev/expr v0.24.0 // indirect
-	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.17.0 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect

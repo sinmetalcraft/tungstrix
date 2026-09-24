@@ -30,3 +30,7 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# querydumpの出力先
+# 実際のQueryがリテラル込みで含まれるためcommitしない
+report/

@@ -40,6 +40,7 @@ go run ./cmd/querydump -project=my-project -instance=my-instance -database=my-db
 | `-top` | `25` | 出力するQueryの件数 |
 | `-prefix` | (なし) | 出力ファイル名の先頭に付ける文字列 |
 | `-out` | `.` | 出力先ディレクトリ |
+| `-params` | (なし) | QueryParameterの型を指定するJSONファイル |
 
 1Queryにつき3ファイルを出力します。
 
@@ -53,7 +54,39 @@ hoge-20260923-1430-CPUTOP01.md   # execution_count, avg_rows_scanned などのQu
 * `-prefix`を指定しない場合は`20260923-1430-CPUTOP01.sql`のようにタイムスタンプから始まります
 * 末尾の連番は`-order`で指定した指標のランキングです
 * `-order=latency`の場合は`CPUTOP`が`LATENCYTOP`になります
-* QueryParameterを含むQueryなど、QueryPlanを取得できないものは`.txt`にエラーを記録して次のQueryに進みます
+* QueryPlanを取得できないQueryは`.txt`にエラーを記録して次のQueryに進みます
+
+### QueryParameter
+
+QueryParameterを含むQueryは、値を渡さなくてもSpannerが文脈から型を推論して実行計画を作ります。
+ただし`UNNEST(@shardids)`のように文脈から型を決められない場合は`INT64`と仮定されるため、以下のように失敗します。
+
+```
+Values referenced in UNNEST must be arrays. UNNEST contains expression of type INT64
+```
+
+この場合、実行計画の取得に失敗したQueryの分だけ`{prefix}-YYYYMMDD-HHMM-params.json`が出力されるので、
+`type`を埋めて`-params`に渡して再実行してください。
+
+```json
+{
+  "6950124233627194671": {
+    "shardids": { "type": "ARRAY<INT64>" },
+    "statuses": { "type": "ARRAY<INT64>" }
+  },
+  "-6724744557130903353": {
+    "startTimestamp": { "type": "TIMESTAMP", "value": "2026-09-01T00:00:00Z" },
+    "endTimestamp": { "type": "TIMESTAMP", "value": "2026-09-02T00:00:00Z" }
+  }
+}
+```
+
+* keyは`text_fingerprint`です。順位(`CPUTOP09`など)は実行するたびに変わりますが、`text_fingerprint`はSQLの内容から決まるので使い回せます
+* `value`は省略できます。省略した場合はその型のNULLをbindします。実行計画を取得するだけなら値は不要なので、通常は`type`だけ書けば十分です
+* Change Streamの`READ_`関数のように実値が必要なものだけ`value`を書いてください
+* 型推論で足りるQueryParameterは書かなくてよいです。`UNNEST`に渡すものなど、必要なものだけ書けば動きます
+* 指定できる型は`BOOL` `INT64` `FLOAT64` `STRING` `BYTES` `DATE` `TIMESTAMP`と、それぞれの`ARRAY<>`です
+* 型を間違えると`No matching signature for operator = for argument types: INT64, STRING`のように正しい型が分かるエラーが返ります
 
 ## 名前の由来
 

@@ -159,7 +159,19 @@ Predicates(identified by ID):
  4: Seek Condition: ($EventID = @event)
 */
 func (s *StatisticsService) AnalyzeQueryRenderTree(ctx context.Context, sql string) (string, error) {
-	plan, err := s.cli.Single().AnalyzeQuery(ctx, spanner.NewStatement(sql))
+	return s.AnalyzeQueryRenderTreeWithParams(ctx, sql, nil)
+}
+
+// AnalyzeQueryRenderTreeWithParams is QueryParameterをbindしてQuery Planをテキスト形式で出力したものを返す
+// Spannerは値が渡されていないQueryParameterの型を文脈から推論するが、UNNEST(@ids)のように
+// 推論できない場合はINT64と仮定して失敗するため、その場合に型を指定したNULLなどをbindする
+func (s *StatisticsService) AnalyzeQueryRenderTreeWithParams(ctx context.Context, sql string, params map[string]any) (string, error) {
+	stmt := spanner.NewStatement(sql)
+	for name, v := range params {
+		stmt.Params[name] = v
+	}
+
+	plan, err := s.cli.Single().AnalyzeQuery(ctx, stmt)
 	if err != nil {
 		return "", err
 	}
