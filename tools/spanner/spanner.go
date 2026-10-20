@@ -212,13 +212,22 @@ func (s *StatisticsService) ListAvgLatencyTop25(ctx context.Context) ([]*QuerySt
 
 // ListQueryStats is spanner_sys.query_stats_top_hourの全期間の統計をorderの降順でlimit件取得する
 // TEXT_FINGERPRINTで集約し、avg_*はexecution_countによる加重平均で算出する
-func (s *StatisticsService) ListQueryStats(ctx context.Context, order QueryStatsOrder, limit int64) ([]*QueryStats, error) {
+// filtersを渡すとWHERE句に条件が追加され、複数渡した場合はANDで結合される
+func (s *StatisticsService) ListQueryStats(ctx context.Context, order QueryStatsOrder, limit int64, filters ...QueryStatsFilter) ([]*QueryStats, error) {
 	sql, err := order.sql()
 	if err != nil {
 		return nil, err
 	}
+	sql, filterParams, err := applyQueryStatsFilters(sql, filters)
+	if err != nil {
+		return nil, err
+	}
+
 	stmt := spanner.NewStatement(sql)
 	stmt.Params["limit"] = limit
+	for name, v := range filterParams {
+		stmt.Params[name] = v
+	}
 
 	iter := s.cli.Single().Query(ctx, stmt)
 	defer iter.Stop()

@@ -18,6 +18,7 @@ FROM spanner_sys.query_stats_top_hour
 -- request_tagが未設定のQueryを落とさないようにIFNULLしている
 WHERE IFNULL(request_tag, '') NOT LIKE 'sys_cloud_console_%'
   AND NOT REGEXP_CONTAINS(text, r'(?i)information_schema')
+  /*FILTERS*/
 GROUP BY text_fingerprint
 ORDER BY total_cpu DESC
 LIMIT @limit;
